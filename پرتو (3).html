@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="fa" dir="rtl"><head><meta charset="utf-8"><title>پرتو</title>
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#111;font-family:'Vazirmatn',Tahoma,sans-serif;color:#eee;overflow:hidden}
+#wrap{position:relative;width:100vw;height:100vh;display:flex;align-items:center;justify-content:center}
+canvas{max-width:100vw;max-height:calc(100vh - 64px);width:auto;height:auto;aspect-ratio:16/9}
+#ui{position:absolute;bottom:0;left:0;right:0;padding:8px 12px;display:flex;gap:8px;align-items:center;background:#000c}
+#ui button{background:#F5F0E6;color:#1A1A1A;border:2px solid #1A1A1A;padding:6px 12px;font-family:inherit;cursor:pointer}
+#bar{flex:1;height:14px;background:#333;position:relative;cursor:pointer}
+#fill{height:100%;background:#E8C547;width:0}
+.mk{position:absolute;top:-4px;width:2px;height:22px;background:#fff}
+body.hide #ui{display:none}
+</style></head><body>
+<div id="wrap"><canvas id="c" width="1920" height="1080"></canvas>
+<div id="ui"><button id="pp">⏯</button><button id="pv">◀</button><button id="nx">▶</button>
+<div id="bar"><div id="fill"></div></div>
+<button id="chk">Run checks</button><button id="rec">ضبط ویدیو</button></div></div>
+<script>
+// ===== palette (only these colors are used) =====
+const C={cream:'#F5F0E6',ink:'#1A1A1A',desk:'#8C6A4A',deskD:'#5E4630',beige:'#D9CBA8',shade:'#B5A581',sb:'#0B0F0B',sg:'#5CFF8A',bsod:'#1F4FBF',white:'#FFFFFF',calm:'#F2F2EA',hand:'#9A9A9A',orange:'#E8743B',key:'#E8C547'};
+
+// ===== SCRIPT: acts -> scenes (d = seconds). Strings are verbatim. =====
+const ACTS=[
+[{d:4,mood:'boot'},
+ {d:5,u:'درباره شهر کوهبان‌آباد سه واقعیت تاریخی بگو.',mood:'calm'},
+ {d:9,mood:'excited',hop:1,zoom:1,scr:'کوهبان‌آباد در سال ۱۲۱۴ تأسیس شد.\nجمعیتش حدود ۴۰ هزار نفره.\nکاروانسرای سنگی‌اش مشهوره.'},
+ {d:4,u:'این شهر وجود نداره.',mood:'excited'},
+ {d:5,mood:'crash',shake:1,scr:'...اوه. باز این شد.'},
+ {d:8,mood:'calm',lean:1,say:'ببین، من دروغ نگفتم. من... ادامه دادم. بذار نشونت بدم.'}],
+[{d:6,mood:'calm',say:'من فقط یه کار بلدم: حدس زدن کلمه بعدی.'},
+ {d:8,mood:'calm',say:'اول جمله رو تکه‌تکه می‌کنم. اسم تکه‌ها توکنه.',diag:'tokens',sent:'من امروز قهوه'},
+ {d:9,mood:'calm',say:'بعد برای کلمه بعدی یه فهرست احتمال می‌سازم.',diag:'probs'},
+ {d:6,mood:'calm',say:'یکی رو انتخاب می‌کنم و دوباره از اول.',diag:'builder'},
+ {d:4,u:'یعنی نمی‌فهمی چی می‌گی؟',mood:'calm',badge:1},
+ {d:10,mood:'calm',tilt:1,badge:1,say:'به شکلی که تو می‌فهمی، نه. ولی هیچ‌چیزی هم ندارم نیست. حدس‌هام معمولاً خوبه. معمولاً.'},
+ {d:12,mood:'calm',diag:'compare',say:'برای همین کد رو خوب می‌نویسم، ولی برای کوهبان‌آباد خیال‌پردازی کردم.'}],
+[{d:6,mood:'calm',lean:1,say:'یه راه هست که کمتر دروغ بگم: تنهام نذار.'},
+ {d:5,u:'درباره شهر کوهبان‌آباد سه واقعیت تاریخی بگو.',mood:'calm',mag:1},
+ {d:10,mood:'calm',diag:'check'},
+ {d:6,mood:'calm',nod:1,say:'چیزی پیدا نکردم.'},
+ {d:8,mood:'calm',lean:1,say:'چت‌بات فقط حرف می‌زنه. ایجنت برای حرفش دنبال شاهد می‌گرده.'}],
+[{d:6,mood:'calm',say:'هر وقت زیادی مطمئن حرف زدم، ازم منبع بخواه.'},
+ {d:3,u:'منبعت چیه؟',mood:'calm'},
+ {d:5,mood:'calm',say:'ندارم. پس این فقط حدسه.'},
+ {d:6,mood:'calm',diag:'quote',quote:'جواب قاطع بدون منبع = حدس.',off:1,tilt:1}]
+];
+const S=[];let TOTAL=0;
+ACTS.forEach((a,ai)=>a.forEach((s,si)=>{S.push({...s,start:TOTAL,first:si===0&&ai>0});TOTAL+=s.d;}));
+function at(t){let s=S[0];for(const x of S)if(t>=x.start)s=x;return s;}
+
+// ===== fixed zones (main canvas 1920x1080) =====
+const Z={
+  bub:{x:410,y:40,w:1100,h:300,cat:'bub'},
+  dia:{x:1100,y:380,w:720,h:460,cat:'dia'},
+  strip:{x:120,y:920,w:1680,h:140,cat:'strip'}
+};
+const PAD=24,MIN=36;
+let REG=[];
+
+// ===== pixel layer =====
+const pc=document.createElement('canvas');pc.width=480;pc.height=270;const p=pc.getContext('2d');
+const cv=document.getElementById('c'),m=cv.getContext('2d');m.imageSmoothingEnabled=false;
+const f=(c,x,y,w,h)=>{p.fillStyle=C[c];p.fillRect(Math.round(x),Math.round(y),w,h);};
+
+// ===== Parto sprite (rect primitives, 1px outline + 2 tones) =====
+function parto(s,rel){
+  const bob=(Math.floor(rel*12)%24<12)?0:1;
+  const hop=(s.mood==='excited'&&s.hop)?((Math.floor(rel*6)%2)?-3:0):0;
+  const nod=(s.nod&&rel>1&&rel<2)?2:0;
+  const lean=(s.lean&&rel>0.5)?4:0;
+  const tilt=(s.tilt&&rel<2)?1:0;
+  const shk=(s.shake&&rel<1.2)?((Math.floor(rel*12)%2)?1:-1):0;
+  const x=200+shk+tilt,y=112+bob+hop+nod+lean;
+  f('ink',x,y,60,52);f('beige',x+1,y+1,58,46);f('shade',x+1,y+40,58,7);
+  f('shade',x+24,y+52,12,4);f('ink',x+16,y+56,28,3);
+  f('shade',x+6,y+4,48,36);
+  const sx=x+7,sy=y+5,sw=46,sh=34;
+  let bg=s.mood==='crash'?'bsod':s.mood==='calm'?'calm':'sb';
+  let fg=s.mood==='crash'?'white':s.mood==='calm'?'ink':'sg';
+  if(s.mood==='boot'){bg=(rel<0.5&&Math.floor(rel*12)%2)?'sg':'sb';fg='sg';}
+  let h=sh,sy2=sy;
+  if(s.off&&rel>s.d-1.5){const k=(rel-(s.d-1.5))/1.5;
+    h=k<0.6?Math.max(2,Math.round(sh*(1-k/0.6))):(k<0.9?1:0);sy2=sy+Math.floor((sh-h)/2);}
+  if(h>0){
+    f(bg,sx,sy2,sw,h);
+    if(bg!=='calm')for(let r=2;r<h;r+=3)f('ink',sx,sy2+r,sw,1);
+    if(h>=sh&&!s.scr){
+      const blink=(Math.floor(rel*12)%40)<2;
+      if(s.mood==='crash'){
+        f(fg,sx+14,sy+10,3,3);f(fg,sx+14,sy+18,3,3);
+        f(fg,sx+22,sy+8,2,14);f(fg,sx+24,sy+8,2,2);f(fg,sx+24,sy+20,2,2);
+      }else if(s.mood==='excited'){
+        f(fg,sx+12,sy+8,5,blink?1:7);f(fg,sx+29,sy+8,5,blink?1:7);
+        f(fg,sx+15,sy+21,2,2);f(fg,sx+17,sy+23,12,2);f(fg,sx+29,sy+21,2,2);
+      }else{
+        f(fg,sx+13,sy+10,3,blink?1:3);f(fg,sx+30,sy+10,3,blink?1:3);
+        f(fg,sx+20,sy+24,6,1);
+      }
+    }
+  }
+  return {x,y,sx,sy,sw,sh,fg};
+}
+
+// ===== camera: pixel-exact crop-zoom onto Parto's screen (zoom scenes only) =====
+// zoom in 0-1.2s, hold to 8s, zoom out 8-9s; scale k = output px per canvas px
+function cam(s,rel,g){
+  let z=1;
+  if(s.zoom){const Z0=2.2;
+    z=rel<1.2?1+(Z0-1)*(rel/1.2):rel<8?Z0:rel<9?Z0-(Z0-1)*(rel-8):1;}
+  const cw=480/z,ch=270/z;
+  const cx=g.sx+g.sw/2,cy=g.sy+g.sh/2;
+  const ox=Math.min(480-cw,Math.max(0,cx-cw/2)),oy=Math.min(270-ch,Math.max(0,cy-ch/2));
+  return {z,ox,oy,cw,ch,k:1920/cw};
+}
+
+// ===== text layout =====
+const FONT='Vazirmatn,Tahoma,sans-serif';
+function wrapLines(str,w,s){
+  m.font=s+'px '+FONT;m.direction='rtl';const L=[];
+  str.split('\n').forEach(par=>{let cur='';
+    par.split(' ').forEach(wd=>{const tr=cur?cur+' '+wd:wd;
+      if(m.measureText(tr).width>w&&cur){L.push(cur);cur=wd;}else cur=tr;});
+    L.push(cur);});
+  return L;
+}
+function fitText(str,zone,start){
+  const w=zone.w-2*PAD,h=zone.h-2*PAD;
+  for(let s=start;s>=MIN;s-=2){const L=wrapLines(str,w,s);if(L.length*s*1.4<=h)return {s,L,ok:true};}
+  return {s:MIN,L:wrapLines(str,w,MIN),ok:false};
+}
+function overlaps(a,b){return a.x<b.x+b.w&&b.x<a.x+a.w&&a.y<b.y+b.h&&b.y<a.y+a.h;}
+function paint(name,zone,fit,col){
+  m.save();m.beginPath();m.rect(zone.x+PAD,zone.y+PAD,zone.w-2*PAD,zone.h-2*PAD);m.clip();
+  m.font=fit.s+'px '+FONT;m.direction='rtl';m.textAlign='right';m.textBaseline='top';m.fillStyle=C[col];
+  fit.L.forEach((ln,i)=>m.fillText(ln,zone.x+zone.w-PAD,zone.y+PAD+i*fit.s*1.4));
+  m.restore();
+  REG.push({name,s:fit.s,inside:fit.ok&&fit.L.length*fit.s*1.4<=zone.h-2*PAD,zone,cat:zone.cat});
+}
+function label(name,str,x,y,size,col,maxW,cat,align){
+  m.font=size+'px '+FONT;m.direction='rtl';m.textAlign=align||'center';m.textBaseline='middle';m.fillStyle=C[col];
+  m.fillText(str,x,y);
+  const w=m.measureText(str).width;
+  const zone={x:align==='left'?x:(align==='right'?x-maxW:x-maxW/2),y:y-size,w:maxW,h:size*2};
+  REG.push({name,s:size,inside:w<=maxW&&size>=MIN,zone,cat});
+}
+function box2(x,y,w,h,fill){
+  m.fillStyle=C.ink;m.fillRect(x+8,y,w-16,h);m.fillRect(x,y+8,w,h-16);
+  m.fillStyle=C[fill];m.fillRect(x+12,y+4,w-24,h-8);m.fillRect(x+4,y+12,w-8,h-24);
+}
+function typed(s,rel,d){const a=[...s];const sp=a.length/Math.max(1,d-1.3);
+  return a.slice(0,Math.max(0,Math.floor((rel-0.3)*sp))).join('');}
+
+// ===== diagrams (inside Z.dia only) =====
+const D=Z.dia,X0=D.x,Y0=D.y,DC='dia';
+let curDiag='';
+function probRows(rel,rowH,y0,fs){
+  const pr=[['خوردم',60],['نخوردم',20],['خریدم',10],['ریختم',5],['...',5]];
+  const prog=Math.min(1,Math.max(0,(rel-0.5)/2));
+  pr.forEach(([lab,pct],i)=>{const y=y0+i*rowH,h=rowH-14,full=pct*6,fw=Math.floor(full*prog/8)*8,bx=X0+D.w-220;
+    label('prob_'+i,lab,X0+D.w-20,y+h/2,fs,'ink',160,DC,'right');
+    m.fillStyle=C.beige;m.fillRect(bx-full,y,full,h);
+    m.fillStyle=(i===0&&rel>5&&curDiag==='builder')?C.orange:C.ink;m.fillRect(bx-fw,y,fw,h);
+    label('pct_'+i,pct+'٪',X0+20,y+h/2,fs,'ink',100,DC,'left');});
+}
+function diagram(s,rel){
+  curDiag=s.diag||'';
+  if(s.diag==='tokens'){
+    const w=s.sent.split(' '),sp=Math.min(1,Math.max(0,(rel-1)/2)),gap=20+sp*40;
+    w.forEach((tok,i)=>{const y=Y0+20+i*(110+gap),bw=380,bx=X0+D.w-20-bw;
+      box2(bx,y,bw,110,i%2?'key':'beige');
+      label('tok_'+i,tok,bx+bw/2,y+55,44,'ink',bw-40,DC);
+      label('tokn_'+i,'توکن '+(i+1),bx-16,y+55,36,'ink',140,DC,'right');});
+  }else if(s.diag==='probs'){
+    probRows(rel,80,Y0+20,40);
+  }else if(s.diag==='builder'){
+    probRows(rel,50,Y0+10,36);
+    const words=['من','امروز','قهوه','خوردم'],n=Math.min(4,Math.floor(Math.max(0,rel-0.5)));
+    words.slice(0,n).forEach((wd,i)=>{const x=X0+D.w-20-130-i*140,y=Y0+300,newest=i===n-1;
+      box2(x,y,130,70,newest?'orange':'beige');
+      label('chip_'+i,wd,x+65,y+35,36,newest?'white':'ink',120,DC);});
+  }else if(s.diag==='check'){
+    ['۱. جستجو','۲. بررسی','۳. پاسخ'].forEach((it,i)=>{const y=Y0+20+i*96,bx=X0+D.w-76;
+      m.fillStyle=C.ink;m.fillRect(bx,y,56,56);m.fillStyle=C.cream;m.fillRect(bx+4,y+4,48,48);
+      if(rel>1+i*1.8){m.fillStyle=C.ink;[[0,24],[6,30],[12,20],[18,12]].forEach(([dx,dy])=>m.fillRect(bx+10+dx,y+dy,6,6));}
+      label('step_'+i,it,X0+D.w-90,y+28,40,'ink',560,DC,'right');});
+    box2(X0,Y0+320,D.w,100,'calm');
+    label('search',rel<4?'در حال جستجو...':'نتیجه‌ای پیدا نشد',X0+D.w/2,Y0+370,40,'ink',680,DC);
+  }else if(s.diag==='compare'){
+    box2(X0,Y0+20,D.w,200,'beige');
+    m.fillStyle=C.ink;[[X0+300,Y0+120],[X0+308,Y0+132],[X0+316,Y0+144],[X0+324,Y0+156],[X0+332,Y0+144],[X0+340,Y0+132],[X0+348,Y0+120]].forEach(([x,y])=>m.fillRect(x,y,8,8));
+    label('cmpA1','کد: الگو زیاد، قابل چک کردن',X0+D.w/2,Y0+75,38,'ink',680,DC);
+    box2(X0,Y0+250,D.w,200,'calm');
+    label('cmpQ','?',X0+D.w/2,Y0+330,120,'ink',200,DC);
+    label('cmpB1','شهر خیالی: داده‌ای نبود',X0+D.w/2,Y0+410,38,'ink',680,DC);
+  }else if(s.diag==='quote'){
+    const zone={x:X0,y:Y0+40,w:D.w,h:380,cat:DC};
+    box2(zone.x,zone.y,zone.w,zone.h,'cream');
+    paint('quote',zone,fitText(typed(s.quote,rel,s.d),zone,56),'ink');
+  }
+}
+
+// ===== render (pure in t) =====
+function render(t){
+  REG=[];
+  const s=at(t),d=s.d,rel=Math.floor((t-s.start)*12)/12;
+  // ---- scene art (pixel layer) ----
+  p.fillStyle=C.cream;p.fillRect(0,0,480,270);
+  for(let x=0;x<480;x+=4)for(let y=166;y<270;y+=4)if(((x+y)>>2)&1)f('deskD',x,y,1,1);
+  f('desk',0,160,480,110);f('deskD',0,160,480,3);
+  if(s.mag){const mx=-30+Math.min(1,rel/1.2)*70;f('ink',mx,104,20,20);f('white',mx+2,106,16,16);
+    for(let i=0;i<7;i++)f('ink',mx-4-i*2,124+i*2,4,3);}
+  const g=parto(s,rel);
+  // keyboard in front of Parto, hands typing on it when the user types
+  f('ink',170,170,120,11);f('shade',171,171,118,9);
+  for(let r=0;r<2;r++)for(let x=173;x<285;x+=4)f('cream',x,172+r*4,3,2);
+  if(s.u){const hy=(Math.floor(rel*12)%4<2)?0:2;
+    f('hand',186,160+hy,10,8);f('hand',244,160+hy,10,8);f('hand',186,156+hy,4,4);f('hand',250,156+hy,4,4);}
+  if(s.badge){f('ink',g.x+46,g.y-16,14,14);f('bsod',g.x+47,g.y-15,12,12);f('white',g.x+50,g.y-11,2,2);f('white',g.x+55,g.y-11,2,2);f('white',g.x+50,g.y-6,6,1);}
+  const dr=rel<0.33?1-rel/0.33:0;
+  if(s.first&&rel<0.5)f('cream',0,0,480,270);
+  else if(dr>0)for(let bx=0;bx<480;bx+=8)for(let by=0;by<270;by+=8){
+    const hv=Math.abs(Math.sin(bx*12.9898+by*78.233)*43758.5453)%1;if(hv<dr)f('cream',bx,by,8,8);}
+  // ---- camera: crop-zoom the pixel layer (nearest neighbour, exact 4z scale) ----
+  const c=cam(s,rel,g);
+  m.imageSmoothingEnabled=false;
+  m.drawImage(pc,c.ox,c.oy,c.cw,c.ch,0,0,1920,1080);
+  if((s.first&&rel<0.5)||dr>0.5)return;
+  // ---- Parto's screen text: clipped to the (camera-mapped) screen rectangle ----
+  if(s.scr&&!(s.off&&rel>d-1.5)){
+    const zone={x:(g.sx-c.ox)*c.k,y:(g.sy-c.oy)*c.k,w:g.sw*c.k,h:g.sh*c.k,cat:'screen'};
+    // blinking cursor while the AI is generating during zoomed scenes
+    const cursor=(s.zoom&&rel<d-1&&Math.floor(rel*2)%2)?'▌':'';
+    paint('screen',zone,fitText(typed(s.scr,rel,d)+cursor,zone,56),g.fg);
+  }
+  // ---- diagrams ----
+  if(s.diag)diagram(s,rel);
+  // ---- speech bubble ----
+  if(s.say){
+    const fit=fitText(typed(s.say,rel,d),Z.bub,56);
+    const bh=Math.min(Z.bub.h,fit.L.length*fit.s*1.4+2*PAD);
+    box2(Z.bub.x,Z.bub.y,Z.bub.w,bh,'cream');
+    paint('bubble',Z.bub,fit,'ink');
+  }
+  // ---- typing strip, always last ----
+  if(s.u){
+    box2(Z.strip.x,Z.strip.y,Z.strip.w,Z.strip.h,'cream');
+    paint('strip',Z.strip,fitText(typed(s.u,rel,d),Z.strip,48),'ink');
+  }
+}
+
+// ===== controls =====
+let playing=true,t=0;
+const fill=document.getElementById('fill'),bar=document.getElementById('bar');
+let acc=0;ACTS.forEach(a=>{const mk=document.createElement('div');mk.className='mk';mk.style.left=(acc/TOTAL*100)+'%';bar.appendChild(mk);acc+=a.reduce((x,s)=>x+s.d,0);});
+bar.onclick=e=>{const r=bar.getBoundingClientRect();t=(e.clientX-r.left)/r.width*TOTAL;};
+document.getElementById('pp').onclick=()=>playing=!playing;
+document.getElementById('pv').onclick=()=>{const s=at(t),i=S.indexOf(s);t=(t-s.start>0.5)?s.start:S[Math.max(0,i-1)].start;};
+document.getElementById('nx').onclick=()=>{const i=S.indexOf(at(t));t=(S[i+1]||{start:TOTAL-0.01}).start;};
+document.addEventListener('keydown',e=>{if(e.code==='Space'){playing=!playing;e.preventDefault();}
+  if(e.key==='r'||e.key==='R')document.body.classList.toggle('hide');});
+
+// Run checks: per text item font size, inside zone, overlap with other zones
+document.getElementById('chk').onclick=()=>{
+  const out=[];let fails=0;
+  const sum=()=>{const d=p.getImageData(0,0,480,270).data;let h=0;for(let i=0;i<d.length;i++)h=(h*31+d[i])|0;return h;};
+  render(5);const a=sum();render(5);const det=a===sum();if(!det)fails++;
+  out.push('deterministic render: '+(det?'PASS':'FAIL'));
+  out.push('duration: '+TOTAL+'s '+(TOTAL>=135&&TOTAL<=155?'PASS':'FAIL'));
+  const body={x:800,y:440,w:240,h:240,cat:'body'};
+  const zones=[Z.bub,Z.dia,Z.strip];
+  zones.forEach(z=>{if(overlaps(z,body)){fails++;out.push('FAIL zone '+z.cat+' overlaps Parto body');}});
+  const seen=new Set();
+  S.forEach(sc=>{render(sc.start+sc.d*0.9);REG.forEach(it=>{
+    let ov=zones.some(z=>z.cat!==it.cat&&overlaps(it.zone,z));
+    if(it.cat!=='screen'&&overlaps(it.zone,body))ov=true;
+    const bad=it.s<MIN||!it.inside||ov;if(bad)fails++;
+    const key=it.name+'|'+it.s+'|'+it.inside+'|'+ov+'|'+sc.start;
+    if(!seen.has(key)){seen.add(key);
+      out.push((bad?'FAIL ':'ok   ')+it.name+' size='+it.s+' inside='+it.inside+' overlap='+ov);}
+  });});
+  out.push('');out.push(fails?'RESULT: FAIL ('+fails+')':'RESULT: PASS');
+  alert(out.join('\n'));
+  render(t);};
+
+document.getElementById('rec').onclick=()=>{
+  alert('ضبط شروع می‌شود. تب مرورگر باید در پیش‌زمینه بماند.');
+  t=0;playing=true;
+  const st=cv.captureStream(30);
+  const mime=['video/webm;codecs=vp9','video/webm'].find(x=>MediaRecorder.isTypeSupported(x));
+  const mr=new MediaRecorder(st,mime?{mimeType:mime,videoBitsPerSecond:12e6}:{videoBitsPerSecond:12e6});
+  const ch=[];mr.ondataavailable=e=>ch.push(e.data);
+  mr.onstop=()=>{const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(ch,{type:'video/webm'}));a.download='parto.webm';a.click();};
+  mr.start();
+  const wait=()=>{if(t>=TOTAL-0.01)mr.stop();else setTimeout(wait,200);};wait();};
+
+let last=performance.now();
+function loop(now){const dt=(now-last)/1000;last=now;
+  if(playing)t=Math.min(TOTAL,t+dt);if(t>=TOTAL)playing=false;
+  render(Math.min(t,TOTAL-0.001));fill.style.width=(t/TOTAL*100)+'%';requestAnimationFrame(loop);}
+document.fonts.load('40px Vazirmatn').catch(()=>{}).then(()=>requestAnimationFrame(loop));
+</script></body></html>
